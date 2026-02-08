@@ -1,8 +1,6 @@
-fpdf
 matplotlib
-numpy==2.4.2
+numpy
 pandas
-Pillow
 scikit-learn
-scipy==1.17.0
+scipy
 seaborn

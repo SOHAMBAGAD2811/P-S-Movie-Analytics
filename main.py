@@ -1,106 +1,110 @@
 import pandas as pd
 import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
+import seaborn as sns
+from scipy import stats
 from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import MinMaxScaler
-from fpdf import FPDF
 
-# --- INITIAL SETUP & CLEANING ---
-def run_analysis():
-    df = pd.read_csv('Movie_Analytics.csv')
-    df = df.rename(columns={'Success_Metric': 'Box_Office_INR_Crores', 'Unnamed: 10': 'Watch_Hours_Millions'})
-    
-    numeric_cols = ['IMDB', 'Letterboxd', 'RT_Critic', 'RT_Audience', 'Box_Office_INR_Crores', 'Watch_Hours_Millions']
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(',', '').str.replace('NULL', '').str.replace('nan', '')
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-    # Normalize Success
-    scaler = MinMaxScaler()
-    df['Normalized_Success'] = np.nan
-    mask_bo = df['Box_Office_INR_Crores'].notnull()
-    mask_wh = df['Watch_Hours_Millions'].notnull()
-    df.loc[mask_bo, 'Normalized_Success'] = scaler.fit_transform(df.loc[mask_bo, ['Box_Office_INR_Crores']])
-    df.loc[mask_wh, 'Normalized_Success'] = scaler.fit_transform(df.loc[mask_wh, ['Watch_Hours_Millions']])
-    
-    return df
+# PROJECT: Multi-Platform Movie Metrics Statistical Analysis
+# Group Members: [Names]
 
-df = run_analysis()
+# 0. LOADING AND CLEANING THE DATA
+df = pd.read_csv('Movie_Analytics.csv')
 
-# --- GENERATE PLOTS ---
-# Plot 1: Distribution
-plt.figure(figsize=(10, 5))
-sns.kdeplot(df['IMDB'], label='IMDb', fill=True, color='blue')
-sns.kdeplot(df['Letterboxd']*2, label='Letterboxd (Scaled)', fill=True, color='orange')
-plt.title('Rating Probability Distributions')
+# Giving columns better names so the code is easier to read during the demo
+df.rename(columns={'Success_Metric': 'Box_Office', 'Unnamed: 10': 'Netflix_Hours'}, inplace=True)
+
+# Cleaning logic: convert to string -> remove commas -> convert back to numeric
+df['Box_Office'] = df['Box_Office'].astype(str).str.replace(',', '').str.replace('"', '').replace('NULL', np.nan)
+df['Box_Office'] = pd.to_numeric(df['Box_Office'], errors='coerce')
+df['Netflix_Hours'] = pd.to_numeric(df['Netflix_Hours'], errors='coerce')
+
+
+# PRESENTER 1: DATA NORMALIZATION (The Fairness Step)
+# Since we have Rupees (Crores) and Watch Hours (Millions), we can't compare them.
+# We use Min-Max scaling to put every movie on a scale from 0 to 1.
+
+
+def min_max_scale(series):
+    return (series - series.min()) / (series.max() - series.min())
+
+df['Box_Office_Norm'] = min_max_scale(df['Box_Office'])
+df['Netflix_Hours_Norm'] = min_max_scale(df['Netflix_Hours'])
+
+# We create a single 'Success Index'. This is our main Y-variable for the project.
+df['Success_Index'] = df[['Box_Office_Norm', 'Netflix_Hours_Norm']].max(axis=1)
+
+print("--- P1: Success Index Created ---")
+print(df[['Movie_Title', 'Success_Index']].head())
+
+
+# PRESENTER 2: CENTRAL TENDENCY (The "Typical" Movie)
+# We calculate Mean and Median to see if the average is being "pulled" by hits.
+imdb_mean = df['IMDB'].mean()
+imdb_median = df['IMDB'].median()
+imdb_mode = df['IMDB'].mode()[0]
+
+
+
+print(f"\n--- P2: Central Tendency ---\nMean: {imdb_mean:.2f}, Median: {imdb_median:.2f}, Mode: {imdb_mode:.2f}")
+
+
+# PRESENTER 3: DISPERSION & SKEWNESS (The Flop Effect)
+# Standard Deviation shows how polarized the ratings are. 
+# We use the Pearson Coefficient for skewness to prove the "long tail" of flops.
+imdb_std = df['IMDB'].std()
+
+# This is the formula we will solve on the board: 3 * (Mean - Median) / StdDev
+imdb_skew_manual = 3 * (imdb_mean - imdb_median) / imdb_std
+
+
+
+print(f"\n--- P3: Spread & Skew ---\nStandard Deviation: {imdb_std:.2f}")
+print(f"Manual Skewness: {imdb_skew_manual:.2f}")
+
+# Plotting the distribution to show the class the "lean" in the data
+plt.figure(figsize=(8, 5))
+sns.histplot(df['IMDB'], kde=True, color='skyblue')
+plt.title('IMDb Rating Distribution')
 plt.savefig('distribution.png')
-plt.close()
 
-# Plot 2: Heatmap
-plt.figure(figsize=(10, 8))
-sns.heatmap(df[['IMDB', 'Letterboxd', 'RT_Critic', 'RT_Audience', 'Normalized_Success']].corr(), annot=True, cmap='coolwarm')
-plt.title('Platform Correlation Heatmap')
-plt.savefig('correlation.png')
-plt.close()
 
-# Plot 3: Regression
-reg_data = df.dropna(subset=['IMDB', 'Normalized_Success'])
-X = reg_data[['IMDB']].values
-y = reg_data['Normalized_Success'].values
-model = LinearRegression().fit(X, y)
+# PRESENTER 4: BIVARIATE CORRELATION (Quality vs. Money)
+# We use Pearson's 'r' to see if there's a real link between score and success.
+corr_val = df['IMDB'].corr(df['Success_Index'])
+
+
+
+print(f"\n--- P4: Correlation Result ---\nPearson r: {corr_val:.4f}")
+
+# Heatmap: This helps visualize which platforms correlate best with revenue.
 plt.figure(figsize=(8, 6))
-plt.scatter(X, y, alpha=0.5)
-plt.plot(X, model.predict(X), color='red')
-plt.title(f'Linear Regression (R²={model.score(X, y):.2f})')
+sns.heatmap(df[['IMDB', 'Letterboxd', 'RT_Critic', 'RT_Audience', 'Success_Index']].corr(), annot=True, cmap='YlGnBu')
+plt.title('Correlation Heatmap')
+plt.savefig('heatmap.png')
+
+
+# PRESENTER 5: LINEAR REGRESSION (Predicting Success)
+# We define a line (Y = mX + C) to predict success based on an IMDb score.
+reg_data = df.dropna(subset=['Success_Index'])
+X = reg_data[['IMDB']].values
+y = reg_data['Success_Index'].values
+
+model = LinearRegression().fit(X, y)
+r_squared = model.score(X, y)
+
+
+
+print(f"\n--- P5: Regression Model ---\nEquation: Y = {model.intercept_:.4f} + {model.coef_[0]:.4f}*X")
+print(f"R-Squared: {r_squared:.4f}")
+
+# Plotting the regression line over our data points
+plt.figure(figsize=(8, 5))
+plt.scatter(X, y, alpha=0.3, label='Actual Data')
+plt.plot(X, model.predict(X), color='red', label='Prediction Line')
+plt.xlabel('IMDb Rating')
+plt.ylabel('Success Index')
+plt.legend()
 plt.savefig('regression.png')
-plt.close()
 
-# --- THE PDF COMPILER ---
-class PDF(FPDF):
-    def header(self):
-        self.set_font('Arial', 'B', 16)
-        self.cell(0, 10, 'CineAnalytics: Multi-Platform Movie Success Study', 0, 1, 'C')
-        self.ln(10)
-
-    def chapter_title(self, title):
-        self.set_font('Arial', 'B', 12)
-        self.set_fill_color(200, 220, 255)
-        self.cell(0, 10, title, 0, 1, 'L', 1)
-        self.ln(4)
-
-    def chapter_body(self, text):
-        self.set_font('Arial', '', 10)
-        self.multi_cell(0, 5, text)
-        self.ln()
-
-pdf = PDF()
-pdf.add_page()
-
-# Section 1: Central Tendency
-pdf.chapter_title('1. Central Tendency Analysis')
-stats_text = f"Mean Ratings:\nIMDb: {df['IMDB'].mean():.2f} | Letterboxd: {df['Letterboxd'].mean():.2f}\n" \
-             f"RT Critic: {df['RT_Critic'].mean():.2f}% | RT Audience: {df['RT_Audience'].mean():.2f}%"
-pdf.chapter_body(stats_text)
-pdf.image('distribution.png', x=10, w=150)
-pdf.ln(10)
-
-# Section 2: Dispersion & Correlation
-pdf.add_page()
-pdf.chapter_title('2. Dispersion & Platform Correlation')
-df['RT_Gap'] = df['RT_Audience'] - df['RT_Critic']
-disp_text = f"Standard Deviation of Audience-Critic Gap: {df['RT_Gap'].std():.2f}\n" \
-            "This high variance indicates significant polarization between professional critics and general fans."
-pdf.chapter_body(disp_text)
-pdf.image('correlation.png', x=10, w=130)
-
-# Section 3: Regression & Conclusion
-pdf.add_page()
-pdf.chapter_title('3. Predictive Success Model')
-pdf.chapter_body('The following regression analysis determines if IMDb scores can predict commercial success.')
-pdf.image('regression.png', x=10, w=140)
-
-pdf.output('Final_Movie_Report.pdf')
-print("PDF Generated: Final_Movie_Report.pdf")
+print("\nAll stats calculated and plots saved for the presentation!")
